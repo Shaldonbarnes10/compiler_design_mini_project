@@ -1,0 +1,180 @@
+import re
+from tabulate import tabulate
+
+# =========================
+# KEYWORDS
+# =========================
+keywords = {'BEGIN', 'PRINT', 'INTEGER', 'REAL', 'STRING', 'FOR', 'TO', 'END'}
+
+# =========================
+# TOKEN SPECIFICATION
+# =========================
+token_specification = [
+    ('KEYWORD',  r'\b(?:BEGIN|PRINT|INTEGER|REAL|STRING|FOR|TO|END)\b'),
+    ('NUMBER', r'-?\d+\.?\d*(?:[Ee][+-]?\d+)?'),
+    ('STRING', r'"[^"]*"'),
+    ('IDENTIFIER', r'\b[a-zA-Z_]\w*\b'),
+    ('ASSIGN', r':='),
+    ('SEMICOLON', r';'),
+    ('COMMA', r','),
+    ('NEWLINE', r'\n'),
+    ('SKIP', r'[ \t]+'),
+    ('MISMATCH', r'.'),
+]
+
+tok_regex = '|'.join(f'(?P<{name}>{pattern})' for name, pattern in token_specification)
+
+# =========================
+# INPUT (same as your report)
+# =========================
+source_code = """
+BEGIN
+PRINT "HELLO";
+INTEGER A, B, C;
+REAL D, E;
+STRING X, Y;
+A := 2;
+B := 4;
+C := 6;
+D := -3.56E-8;
+E := 4.567;
+X := "text1";
+Y := "hello there";
+FOR I := 1 TO 5
+PRINT "Strings are [X] and [Y]";
+END
+END
+"""
+
+# =========================
+# TOKENIZATION
+# =========================
+tokens = []
+
+for mo in re.finditer(tok_regex, source_code):
+    kind = mo.lastgroup
+    value = mo.group()
+
+    if kind in ['SKIP', 'NEWLINE']:
+        continue
+
+    if kind == 'MISMATCH':
+        raise RuntimeError(f"Unexpected token: {value}")
+
+    tokens.append((kind, value))
+
+tokens.append(('$', '$'))
+
+# =========================
+# HELPER FUNCTION
+# =========================
+def token_type(token):
+    kind, value = token
+    if kind == 'KEYWORD':
+        return value
+    elif kind == 'IDENTIFIER':
+        return "IDENTIFIER"
+    elif kind == 'NUMBER':
+        return "NUMBER"
+    elif kind == 'STRING':
+        return "STRING"
+    elif kind == 'ASSIGN':
+        return ":="
+    elif kind == 'SEMICOLON':
+        return ";"
+    elif kind == 'COMMA':
+        return ","
+    return value
+
+# =========================
+# GRAMMAR
+# =========================
+grammar = {
+    "program": [["BEGIN", "stmt_list", "END"]],
+    "stmt_list": [["stmt", "stmt_list"], ["ε"]],
+    "stmt": [["PRINT", "expr", ";"],
+             ["declaration"],
+             ["assignment"],
+             ["for_loop"]],
+    "declaration": [["type", "var_list", ";"]],
+    "type": [["INTEGER"], ["REAL"], ["STRING"]],
+    "var_list": [["IDENTIFIER", "var_list_tail"]],
+    "var_list_tail": [[",", "IDENTIFIER", "var_list_tail"], ["ε"]],
+    "assignment": [["IDENTIFIER", ":=", "expr", ";"]],
+    "for_loop": [["FOR", "IDENTIFIER", ":=", "expr", "TO", "expr", "stmt_list", "END"]],
+    "expr": [["IDENTIFIER"], ["NUMBER"], ["STRING"]],
+}
+
+# =========================
+# PARSER (FULL TRACE)
+# =========================
+def parse(tokens):
+    stack = ["$", "program"]
+    index = 0
+    steps = []
+    step_no = 1
+
+    while True:
+        stack_str = " ".join(stack)
+        current = tokens[index]
+        input_symbol = current[1]
+
+        top = stack[-1]
+        current_type = token_type(current)
+
+        action = ""
+
+        # ACCEPT
+        if top == "$" and current_type == "$":
+            action = "Parsing completed successfully!"
+            steps.append([step_no, stack_str, "$", action])
+            break
+
+        # MATCH
+        elif top == current_type:
+            action = f"Match '{current_type}'"
+            stack.pop()
+            index += 1
+
+        # NON-TERMINAL
+        elif top in grammar:
+            found = False
+            for prod in grammar[top]:
+                if prod[0] == current_type or prod[0] == "ε":
+                    action = f"Apply: {top} → {' '.join(prod)}"
+                    stack.pop()
+                    if prod != ["ε"]:
+                        stack.extend(reversed(prod))
+                    found = True
+                    break
+
+            if not found:
+                action = "ERROR"
+                steps.append([step_no, stack_str, input_symbol, action])
+                break
+
+        else:
+            action = "ERROR"
+            steps.append([step_no, stack_str, input_symbol, action])
+            break
+
+        steps.append([step_no, stack_str, input_symbol, action])
+        step_no += 1
+
+    return steps
+
+# =========================
+# RUN
+# =========================
+parsing_steps = parse(tokens)
+
+# =========================
+# OUTPUT (PDF STYLE)
+# =========================
+
+print("\nFULL PARSING ACTIONS:\n")
+print(tabulate(
+    parsing_steps,
+    headers=["Step", "Stack", "Input Symbol", "Action"],
+    tablefmt="grid"
+))
